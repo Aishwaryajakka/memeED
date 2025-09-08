@@ -1,0 +1,84 @@
+dist/
+build/
+.env
+.env.*
+
+# Vite
+.vite/
+
+# macOS
+.DS_Store
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+
+# Tailwind CSS
+.tailwind*
+
+# OS
+Thumbs.db
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+
+# Others
+*.log
+
+# Ignore local environment files
+local.env
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build
+dist/
+build/
+.cache/
+*.log
+
+# React/Vite
+.mvite
+.vite
+
+# Backend
+memeED-backend/node_modules/
+memeED-backend/dist/
+memeED-backend/*.env
+memeED-backend/graphrag_export/
+
+# Frontend
+memeED-frontend/node_modules/
+memeED-frontend/dist/
+memeED-frontend/*.env
+
+# GraphRAG
+memeED-graphRAG/.venv/
+memeED-graphRAG/graphrag_run/
+memeED-graphRAG/memeED-kg/output/
+memeED-graphRAG/memeED-kg/cache/
+memeED-graphRAG/memeED-kg/logs/
+memeED-graphRAG/memeED-kg/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+*.parquet
+
+# OS
+.DS_Store
+Thumbs.db
