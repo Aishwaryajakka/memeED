@@ -1,3 +1,5 @@
+export const graphCommunities = (q) =>
+  api.get("/api/graphrag/community", { params: { q } }).then(r => r.data);
 import axios from "axios";
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || "http://localhost:8080",

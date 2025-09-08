@@ -1,16 +1,43 @@
+// ===== imports & env =====
 import express from "express";
 import cors from "cors";
 import * as dotenv from "dotenv";
 dotenv.config();
 
+import fs from "fs";
+import path from "path";
+import weaviate, { ApiKey } from "weaviate-ts-client";
+import OpenAI from "openai";
+
+// ===== config =====
 const PORT = process.env.PORT || 8080;
 const USE_WEAVIATE = String(process.env.USE_WEAVIATE || "false") === "true";
+const VECTORIZER = process.env.VECTORIZER || "text2vec-weaviate";
 const USE_LLM = String(process.env.USE_LLM || "false") === "true";
 
-import weaviate, { ApiKey } from "weaviate-ts-client";
+// ===== app =====
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-// -------- Optional LLM (you can keep USE_LLM=false) ----------
-import OpenAI from "openai";
+// ----- health check -----
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+// ===== GraphRAG export loader (must run before GraphRAG routes) =====
+const GEXPORT_DIR = path.resolve(process.cwd(), "graphrag_export");
+let GR_GRAPH = null, GR_COMMS = null;
+try {
+  GR_GRAPH  = JSON.parse(fs.readFileSync(path.join(GEXPORT_DIR, "graph.json"), "utf-8"));
+  GR_COMMS  = JSON.parse(fs.readFileSync(path.join(GEXPORT_DIR, "communities.json"), "utf-8"));
+  console.log("GraphRAG export loaded.");
+} catch (e) {
+  console.log("GraphRAG export not found; endpoints will return empty.");
+}
+
+// ===== Weaviate client (initialized in ensureWeaviate) =====
+let weavClient = null;
+
+// ===== Optional LLM (keep USE_LLM=false if you don't need it) =====
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
@@ -35,12 +62,11 @@ Return JSON array of objects with keys: question, choices (array of 4), answer (
     messages: [{ role: "user", content: prompt }],
     temperature: 0.7
   });
-  // try to parse JSON from the model
   const text = r.choices[0].message.content;
   try { return JSON.parse(text); } catch { return []; }
 }
 
-// --------------- Fallback (no LLM) ----------------
+// ===== Fallback generators =====
 const hookTemplate = (topic, style = "meme") => {
   const styles = {
     meme: (t) => `If ${t} were a meme: “Sun hits leaf — *PhotosynTHIS!* 🌞➡️🔋”`,
@@ -71,21 +97,23 @@ const quizTemplate = (topic, level = "easy") => ([
   }
 ]);
 
-// --------------- Storage Layer (switchable) ---------------
-let memHooks = [];     // used when USE_WEAVIATE=false
+// ===== In-memory store (used when USE_WEAVIATE=false) =====
+let memHooks = [];
 let memQuizItems = [];
 
-let weavClient = null;
+// ===== Weaviate schema init =====
 async function ensureWeaviate() {
   if (!USE_WEAVIATE) return;
+
   const host = (process.env.WEAVIATE_URL || "").replace(/^https?:\/\//, "");
   weavClient = weaviate.client({
     scheme: "https",
     host,
     apiKey: new ApiKey(process.env.WEAVIATE_API_KEY || ""),
-    headers: process.env.OPENAI_API_KEY
-      ? { "X-OpenAI-Api-Key": process.env.OPENAI_API_KEY }
-      : {}
+    headers:
+      VECTORIZER === "text2vec-openai" && process.env.OPENAI_API_KEY
+        ? { "X-OpenAI-Api-Key": process.env.OPENAI_API_KEY }
+        : {},
   });
 
   const schema = await weavClient.schema.getter().do();
@@ -94,36 +122,64 @@ async function ensureWeaviate() {
   if (!have("Hook")) {
     await weavClient.schema.classCreator().withClass({
       class: "Hook",
-      vectorizer: "text2vec-openai",
+      vectorizer: VECTORIZER,
       properties: [
         { name: "topic", dataType: ["text"] },
         { name: "style", dataType: ["text"] },
-        { name: "text", dataType: ["text"] },
-        { name: "tags", dataType: ["text[]"] }
-      ]
+        { name: "text",  dataType: ["text"] },
+        { name: "tags",  dataType: ["text[]"] },
+      ],
     }).do();
   }
+
   if (!have("QuizItem")) {
     await weavClient.schema.classCreator().withClass({
       class: "QuizItem",
-      vectorizer: "text2vec-openai",
+      vectorizer: VECTORIZER,
       properties: [
         { name: "topic", dataType: ["text"] },
         { name: "question", dataType: ["text"] },
-        { name: "choices", dataType: ["text[]"] },
-        { name: "answer", dataType: ["text"] },
-        { name: "difficulty", dataType: ["text"] }
-      ]
+        { name: "choices",  dataType: ["text[]"] },
+        { name: "answer",   dataType: ["text"] },
+        { name: "difficulty", dataType: ["text"] },
+      ],
     }).do();
   }
+
+  console.log("✅ Weaviate schema ready");
 }
 
-// --------------- App ----------------
-const app = express();
-app.use(cors());
-app.use(express.json());
-
+// ===== BASIC ROUTE =====
 app.get("/", (_req, res) => res.json({ ok: true, useWeaviate: USE_WEAVIATE }));
+
+// ===== GraphRAG ROUTES (now safe: app exists and files (may) be loaded) =====
+app.get("/api/graphrag/community", (req, res) => {
+  const q = String(req.query.q || "").toLowerCase();
+  if (!GR_COMMS) return res.json({ summaries: [] });
+
+  const hits = (GR_COMMS.communities || [])
+    .filter(c =>
+      (c.title || "").toLowerCase().includes(q) ||
+      (c.summary || "").toLowerCase().includes(q)
+    )
+    .slice(0, 3);
+
+  res.json({ summaries: hits });
+});
+
+app.get("/api/graphrag/graph", (req, res) => {
+  const q = String(req.query.q || "").toLowerCase();
+  if (!GR_GRAPH) return res.json({ nodes: [], edges: [] });
+
+  const nodes = GR_GRAPH.nodes.filter(n =>
+    (n.title || "").toLowerCase().includes(q)
+  );
+  const ids = new Set(nodes.map(n => n.id));
+  const edges = GR_GRAPH.edges.filter(e => ids.has(e.source) || ids.has(e.target));
+  res.json({ nodes, edges });
+});
+
+// ===== Your core routes =====
 
 // Create Hook
 app.post("/api/hook", async (req, res) => {
@@ -138,7 +194,7 @@ app.post("/api/hook", async (req, res) => {
     text = hookTemplate(topic, style);
   }
 
-  if (USE_WEAVIATE) {
+  if (USE_WEAVIATE && weavClient) {
     try {
       const obj = await weavClient.data.creator()
         .withClassName("Hook")
@@ -147,7 +203,6 @@ app.post("/api/hook", async (req, res) => {
       return res.json({ hook: text, id: obj.id });
     } catch (e) {
       console.error("Weaviate create Hook failed:", e.message);
-      // fall back to memory if needed
     }
   }
 
@@ -169,7 +224,7 @@ app.post("/api/quiz", async (req, res) => {
     items = quizTemplate(topic, level);
   }
 
-  if (USE_WEAVIATE) {
+  if (USE_WEAVIATE && weavClient) {
     try {
       const created = await Promise.all(
         items.map(it => weavClient.data.creator()
@@ -181,7 +236,6 @@ app.post("/api/quiz", async (req, res) => {
       return res.json({ items, ids: created.map(c => c.id) });
     } catch (e) {
       console.error("Weaviate create Quiz failed:", e.message);
-      // fall back to memory
     }
   }
 
@@ -190,12 +244,12 @@ app.post("/api/quiz", async (req, res) => {
   res.json({ items, ids });
 });
 
-// Semantic-ish search (Weaviate nearText if available; fallback substring)
+// Search (Weaviate nearText if enabled; else substring fallback)
 app.get("/api/search", async (req, res) => {
   const q = String(req.query.q || "").trim();
   if (!q) return res.json({ hooks: [] });
 
-  if (USE_WEAVIATE) {
+  if (USE_WEAVIATE && weavClient) {
     try {
       const r = await weavClient.graphql.get()
         .withClassName("Hook")
@@ -206,7 +260,6 @@ app.get("/api/search", async (req, res) => {
       return res.json({ hooks: r.data.Get.Hook || [] });
     } catch (e) {
       console.error("Weaviate search failed:", e.message);
-      // fall back to memory
     }
   }
 
@@ -217,13 +270,13 @@ app.get("/api/search", async (req, res) => {
   res.json({ hooks: hits });
 });
 
+// ===== start server (init Weaviate if enabled) =====
 app.listen(PORT, async () => {
   if (USE_WEAVIATE) {
     try {
       await ensureWeaviate();
-      console.log(`Weaviate connected. Backend on :${PORT}`);
     } catch (e) {
-      console.error("Weaviate init failed, using memory store.", e.message);
+      console.error("Weaviate init failed; using memory store.", e.message);
     }
   }
   console.log(`memeED API running on http://localhost:${PORT}`);

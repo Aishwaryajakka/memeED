@@ -24,9 +24,12 @@ const client = weaviate.client({
   headers: process.env.OPENAI_API_KEY ? { "X-OpenAI-Api-Key": process.env.OPENAI_API_KEY } : {}
 });
 
-for (const s of seeds) {
-  await client.data.creator().withClassName("Hook").withProperties(s).do();
-  console.log("Seeded:", s.topic);
-}
-console.log("Done.");
-process.exit(0);
+
+(async () => {
+  for (const s of seeds) {
+    await client.data.creator().withClassName("Hook").withProperties(s).do();
+    console.log("Seeded:", s.topic);
+  }
+  console.log("Done.");
+  process.exit(0);
+})();
