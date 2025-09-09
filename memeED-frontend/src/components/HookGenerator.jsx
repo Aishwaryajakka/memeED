@@ -1,121 +1,86 @@
 import { useState } from "react";
-import { createHook, createQuiz } from "../api";
+import { createHook } from "../api";
 
 export default function HookGenerator() {
   const [topic, setTopic] = useState("");
   const [style, setStyle] = useState("meme");
-  const [hook, setHook] = useState("");
-  const [isGenHook, setIsGenHook] = useState(false);
-  const [quiz, setQuiz] = useState([]);
-  const [isGenQuiz, setIsGenQuiz] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const disabled = !topic.trim();
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
 
-  const onGenHook = async () => {
+  async function onGenerate(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setResult(null);
     try {
-      setIsGenHook(true);
-      const { hook } = await createHook({ topic, style });
-      setHook(hook);
-    } catch (e) {
-      alert("Failed to generate hook. Is the backend running on :8080?");
-      console.error(e);
+      const data = await createHook({ topic, style });
+      console.log("HOOK DATA", data);
+      setResult(data);
+    } catch (err) {
+      setError(err?.message || "Request failed");
     } finally {
-      setIsGenHook(false);
+      setLoading(false);
     }
-  };
-
-  const onGenQuiz = async () => {
-    try {
-      setIsGenQuiz(true);
-      const { items } = await createQuiz({ topic, level: "easy" });
-      setQuiz(items || []);
-    } catch (e) {
-      alert("Failed to generate quiz.");
-      console.error(e);
-    } finally {
-      setIsGenQuiz(false);
-    }
-  };
-
-  const copyHook = async () => {
-    if (!hook) return;
-    try {
-      await navigator.clipboard.writeText(hook);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {}
-  };
+  } // ← function ends here (do NOT put an extra "};" after this)
 
   return (
-    <section className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-[1fr,160px]">
+    <section className="space-y-4 border rounded p-4">
+      <form onSubmit={onGenerate} className="grid gap-3 md:grid-cols-[1fr,160px,120px]">
         <input
-          className="border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          placeholder='Topic (e.g., "photosynthesis", "algebra fractions")'
+          className="border rounded p-2"
+          placeholder="Topic (e.g., photosynthesis)"
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
         />
         <select
-          className="border rounded-xl px-3 py-2"
+          className="border rounded p-2"
           value={style}
           onChange={(e) => setStyle(e.target.value)}
         >
-          <option value="meme">Meme</option>
-          <option value="analogy">Analogy</option>
-          <option value="story">Story</option>
+          <option value="meme">meme</option>
+          <option value="analogy">analogy</option>
+          <option value="story">story</option>
         </select>
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={onGenHook}
-          disabled={disabled || isGenHook}
-          className="px-4 py-2 rounded-xl bg-indigo-600 text-white disabled:opacity-40"
-        >
-          {isGenHook ? "Generating…" : "Generate Hook"}
+        <button className="bg-black text-white rounded px-4" disabled={!topic || loading}>
+          {loading ? "Generating…" : "Generate"}
         </button>
-        <button
-          onClick={onGenQuiz}
-          disabled={disabled || isGenQuiz}
-          className="px-4 py-2 rounded-xl border"
-        >
-          {isGenQuiz ? "Making Quiz…" : "Generate Quiz"}
-        </button>
-      </div>
+      </form>
 
-      {hook && (
-        <div className="p-4 rounded-2xl border shadow-sm bg-white">
-          <div className="flex items-start justify-between gap-3">
-            <h3 className="font-semibold">Hook</h3>
-            <button
-              onClick={copyHook}
-              className="text-xs px-2 py-1 rounded-lg border"
-              title="Copy"
-            >
-              {copied ? "Copied!" : "Copy"}
-            </button>
-          </div>
-          <p className="mt-2">{hook}</p>
-          <div className="mt-2 text-xs text-gray-500">
-            Topic: {topic} • Style: {style}
-          </div>
-        </div>
-      )}
+      {error && <div className="text-red-600">{error}</div>}
 
-      {quiz.length > 0 && (
-        <div className="p-4 rounded-2xl border shadow-sm bg-white">
-          <h3 className="font-semibold">Quiz (3)</h3>
-          <ol className="list-decimal pl-5 mt-2 space-y-3">
-            {quiz.map((q, i) => (
-              <li key={i}>
-                <div className="font-medium">{q.question}</div>
-                <ul className="list-disc pl-5 mt-1">
-                  {q.choices?.map((c, j) => <li key={j}>{c}</li>)}
-                </ul>
-                <div className="text-xs text-gray-500 mt-1">Answer: {q.answer}</div>
-              </li>
-            ))}
-          </ol>
+      {result && (
+        <div className="space-y-2">
+          <div className="font-semibold">Hook</div>
+          <div className="border rounded p-3">{result.hook || "No hook"}</div>
+
+          <div className="text-sm text-gray-600">
+            <span className="font-medium">Used:</span>{" "}
+            {result.context?.graphrag_used ? "GraphRAG " : ""}
+            {result.context?.weaviate_used ? "Weaviate" : (!result.context?.graphrag_used ? "none" : "")}
+          </div>
+
+          {result.context?.graph_snippets?.length > 0 && (
+            <>
+              <div className="font-medium">GraphRAG snippets</div>
+              <ul className="list-disc pl-6 text-sm">
+                {result.context.graph_snippets.map((s, i) => (
+                  <li key={`g-${i}`}>{s}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {result.context?.weaviate_snippets?.length > 0 && (
+            <>
+              <div className="font-medium">Weaviate snippets</div>
+              <ul className="list-disc pl-6 text-sm">
+                {result.context.weaviate_snippets.map((s, i) => (
+                  <li key={`w-${i}`}>{s}</li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </section>
